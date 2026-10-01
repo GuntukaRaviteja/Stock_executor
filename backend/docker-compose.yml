@@ -1,0 +1,57 @@
+version: '3.8'
+
+# ==============================================================================
+# NOTE ON DOCKER MYSQL VS LOCAL EXISTING MYSQL:
+# If you are developing locally with your existing MySQL Workbench / MySQL
+# installation, run the backend natively using:
+#     source .venv/bin/activate && uvicorn app.main:app --reload
+#
+# If you prefer running isolated containers, use:
+#     docker compose up --build
+# The Docker MySQL service maps to host port 3307 to avoid collisions
+# with your existing local MySQL running on port 3306.
+# ==============================================================================
+
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: stock_intelligence_mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: rootpassword
+      MYSQL_DATABASE: stock_ml_db
+    ports:
+      - "3307:3306"
+    volumes:
+      - mysql_container_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-prootpassword"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: stock_intelligence_backend
+    restart: unless-stopped
+    depends_on:
+      mysql:
+        condition: service_healthy
+    environment:
+      - APP_NAME=Stock Intelligence API (Docker)
+      - APP_ENV=production
+      - DEBUG=false
+      - DATABASE_URL=mysql+pymysql://root:rootpassword@mysql:3306/stock_ml_db
+      - MARKET_DATA_PROVIDER=mock
+      - NEWS_DATA_PROVIDER=mock
+    ports:
+      - "8000:8000"
+    command: >
+      sh -c "alembic upgrade head &&
+             python scripts/seed_stocks.py &&
+             uvicorn app.main:app --host 0.0.0.0 --port 8000"
+
+volumes:
+  mysql_container_data:
