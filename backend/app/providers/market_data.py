@@ -211,6 +211,78 @@ class AlphaVantageMarketDataProvider(BaseMarketDataProvider):
         raise ProviderError("AlphaVantage", f"Request failed after retries: {last_error}")
 
 
+class YahooFinanceMarketDataProvider(BaseMarketDataProvider):
+    """Yahoo Finance market data provider using yfinance library."""
+
+    def __init__(self, timeout: float = 10.0):
+        self.timeout = timeout
+
+    async def get_quote(self, symbol: str) -> Dict[str, Any]:
+        import yfinance as yf
+
+        try:
+            ticker = yf.Ticker(symbol)
+            info = ticker.fast_info
+            hist = ticker.history(period="1d", interval="1d")
+            if hist.empty:
+                raise ProviderError("YahooFinance", f"No quote data for symbol {symbol}")
+
+            latest = hist.iloc[-1]
+            return {
+                "symbol": symbol.upper(),
+                "price_date": latest.name.date() if hasattr(latest.name, 'date') else date.today(),
+                "open_price": Decimal(str(latest["Open"])),
+                "high_price": Decimal(str(latest["High"])),
+                "low_price": Decimal(str(latest["Low"])),
+                "close_price": Decimal(str(latest["Close"])),
+                "adjusted_close": Decimal(str(latest.get("Adj Close", latest["Close"]))),
+                "volume": int(latest["Volume"]) if latest["Volume"] else 0,
+            }
+        except Exception as e:
+            logger.error(f"YahooFinance get_quote error for {symbol}: {e}")
+            raise ProviderError("YahooFinance", f"Failed to fetch quote: {e}")
+
+    async def get_historical_data(
+        self,
+        symbol: str,
+        start_date: Optional[date] = None,
+        end_date: Optional[date] = None,
+    ) -> List[Dict[str, Any]]:
+        import yfinance as yf
+
+        try:
+            ticker = yf.Ticker(symbol)
+            start = start_date or (date.today() - timedelta(days=365))
+            end = end_date or date.today()
+
+            # yfinance end date is exclusive, add 1 day
+            end_plus_one = end + timedelta(days=1)
+
+            hist = ticker.history(start=start, end=end_plus_one, interval="1d", auto_adjust=False)
+            if hist.empty:
+                logger.info(f"YahooFinance: No historical data for {symbol} from {start} to {end}")
+                return []
+
+            results: List[Dict[str, Any]] = []
+            for idx, row in hist.iterrows():
+                trading_date = idx.date() if hasattr(idx, 'date') else idx
+                results.append({
+                    "price_date": trading_date,
+                    "open_price": Decimal(str(row["Open"])) if row["Open"] else None,
+                    "high_price": Decimal(str(row["High"])) if row["High"] else None,
+                    "low_price": Decimal(str(row["Low"])) if row["Low"] else None,
+                    "close_price": Decimal(str(row["Close"])) if row["Close"] else None,
+                    "adjusted_close": Decimal(str(row.get("Adj Close", row["Close"]))) if row.get("Adj Close", row["Close"]) else None,
+                    "volume": int(row["Volume"]) if row["Volume"] else 0,
+                })
+
+            logger.info(f"YahooFinance: fetched {len(results)} historical records for {symbol}")
+            return results
+        except Exception as e:
+            logger.error(f"YahooFinance get_historical_data error for {symbol}: {e}")
+            raise ProviderError("YahooFinance", f"Failed to fetch historical data: {e}")
+
+
 def get_market_data_provider() -> BaseMarketDataProvider:
     """Provider factory based on application settings."""
     provider_name = settings.MARKET_DATA_PROVIDER.lower()
@@ -218,6 +290,11 @@ def get_market_data_provider() -> BaseMarketDataProvider:
         logger.info("Using AlphaVantageMarketDataProvider")
         return AlphaVantageMarketDataProvider(
             api_key=settings.MARKET_DATA_API_KEY,
+            timeout=settings.MARKET_DATA_TIMEOUT_SECONDS,
+        )
+    elif provider_name == "yfinance":
+        logger.info("Using YahooFinanceMarketDataProvider")
+        return YahooFinanceMarketDataProvider(
             timeout=settings.MARKET_DATA_TIMEOUT_SECONDS,
         )
     logger.info("Using MockMarketDataProvider")

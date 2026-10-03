@@ -1,6 +1,6 @@
 from datetime import date
 from typing import List, Optional
-from sqlalchemy import desc, select
+from sqlalchemy import asc, desc, select
 from sqlalchemy.orm import Session
 from app.models.price import StockPrice
 
@@ -58,6 +58,30 @@ class PriceRepository:
         stmt = stmt.order_by(desc(StockPrice.price_date)).limit(limit)
         return list(db.scalars(stmt).all())
 
+    def get_history_asc(
+        self,
+        db: Session,
+        stock_id: int,
+        start_date: Optional[date] = None,
+        end_date: Optional[date] = None,
+        limit: Optional[int] = None,
+    ) -> List[StockPrice]:
+        """
+        Get historical prices in ascending chronological order.
+        Used for technical analysis calculations.
+        """
+        stmt = select(StockPrice).where(StockPrice.stock_id == stock_id)
+
+        if start_date:
+            stmt = stmt.where(StockPrice.price_date >= start_date)
+        if end_date:
+            stmt = stmt.where(StockPrice.price_date <= end_date)
+
+        stmt = stmt.order_by(asc(StockPrice.price_date))
+        if limit:
+            stmt = stmt.limit(limit)
+        return list(db.scalars(stmt).all())
+
     def get_existing_dates_for_stock(
         self,
         db: Session,
@@ -72,6 +96,15 @@ class PriceRepository:
         if end_date:
             stmt = stmt.where(StockPrice.price_date <= end_date)
         return set(db.scalars(stmt).all())
+
+    def update(self, db: Session, price: StockPrice, update_data: dict) -> StockPrice:
+        """Update an existing price record."""
+        for field, value in update_data.items():
+            if hasattr(price, field):
+                setattr(price, field, value)
+        db.commit()
+        db.refresh(price)
+        return price
 
 
 price_repository = PriceRepository()

@@ -1,4 +1,8 @@
+from datetime import date
 from fastapi.testclient import TestClient
+from unittest.mock import AsyncMock, patch
+from app.core.exceptions import ProviderError
+from app.models.stock import Stock
 
 
 def create_test_stock(client: TestClient, symbol: str = "AAPL") -> int:
@@ -134,3 +138,169 @@ def test_invalid_price_data(client: TestClient):
     data = response.json()
     assert data["success"] is False
     assert data["error"]["code"] == "VALIDATION_ERROR"
+
+
+def test_ingest_current_price(client: TestClient, db_session):
+    """Test 13: Ingest current price from market data provider."""
+    stock_id = create_test_stock(client, "CURRPRICE")
+
+    # Use mock provider - it will return deterministic data for today
+    response = client.post(f"/api/v1/stocks/{stock_id}/prices/ingest")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["stock_id"] == stock_id
+    assert data["symbol"] == "CURRPRICE"
+    assert data["status"] == "success"
+    assert data["records_received"] == 1
+    assert data["records_inserted"] == 1
+    assert data["records_updated"] == 0
+    assert data["records_skipped"] == 0
+
+    # Verify price was stored
+    latest_res = client.get(f"/api/v1/stocks/{stock_id}/prices/latest")
+    assert latest_res.status_code == 200
+    assert latest_res.json()["price_date"] == str(date.today())
+
+
+def test_ingest_current_price_idempotent(client: TestClient, db_session):
+    """Test 14: Current price ingestion is idempotent."""
+    stock_id = create_test_stock(client, "IDEMPOTENT")
+
+    # First ingestion
+    res1 = client.post(f"/api/v1/stocks/{stock_id}/prices/ingest")
+    assert res1.status_code == 200
+    assert res1.json()["records_inserted"] == 1
+    assert res1.json()["records_updated"] == 0
+
+    # Second ingestion (same day) - should update, not insert duplicate
+    res2 = client.post(f"/api/v1/stocks/{stock_id}/prices/ingest")
+    assert res2.status_code == 200
+    assert res2.json()["records_inserted"] == 0
+    assert res2.json()["records_updated"] == 1
+
+    # Verify only one record exists
+    history_res = client.get(f"/api/v1/stocks/{stock_id}/prices")
+    assert history_res.status_code == 200
+    assert len(history_res.json()) == 1
+
+
+def test_ingest_current_price_provider_failure(client: TestClient, db_session):
+    """Test 15: Current price ingestion handles provider failure gracefully."""
+    from app.services.market_data.service import market_data_service
+    from app.services.market_data.fetcher import MarketDataFetcher
+    from app.providers.market_data import BaseMarketDataProvider
+
+    stock_id = create_test_stock(client, "FAILPRICE")
+
+    # Create a failing provider
+    failing_provider = AsyncMock()
+    failing_provider.get_historical_data.side_effect = ProviderError("FailingAPI", "API down")
+    failing_provider.get_quote.side_effect = ProviderError("FailingAPI", "API down")
+    failing_provider.__class__.__name__ = "FailingProvider"
+
+    failing_fetcher = MarketDataFetcher(failing_provider)
+    failing_service = type(market_data_service)(fetcher=failing_fetcher)
+
+    # Override the dependency
+    from app.main import app
+    from app.api.dependencies import get_market_data_service
+
+    app.dependency_overrides[get_market_data_service] = lambda: failing_service
+
+    try:
+        response = client.post(f"/api/v1/stocks/{stock_id}/prices/ingest")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["status"] == "failed"
+        assert "API down" in data["error"]
+        assert data["records_inserted"] == 0
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_ingest_historical_prices(client: TestClient, db_session):
+    """Test 16: Ingest historical prices from market data provider."""
+    stock_id = create_test_stock(client, "HISTPRICE")
+
+    payload = {
+        "start_date": "2025-01-01",
+        "end_date": "2025-01-10",
+    }
+    response = client.post(f"/api/v1/stocks/{stock_id}/prices/ingest-historical", json=payload)
+    assert response.status_code == 200
+    data = response.json()
+    assert data["stock_id"] == stock_id
+    assert data["symbol"] == "HISTPRICE"
+    assert data["status"] == "success"
+    assert data["records_received"] > 0
+    assert data["records_inserted"] > 0
+    assert data["records_updated"] == 0
+    assert data["records_skipped"] >= 0
+
+    # Verify history was stored
+    history_res = client.get(f"/api/v1/stocks/{stock_id}/prices?start_date=2025-01-01&end_date=2025-01-10")
+    assert history_res.status_code == 200
+    assert len(history_res.json()) > 0
+
+
+def test_ingest_historical_prices_idempotent(client: TestClient, db_session):
+    """Test 17: Historical price ingestion is idempotent."""
+    stock_id = create_test_stock(client, "HISTIDEMP")
+
+    payload = {
+        "start_date": "2025-01-01",
+        "end_date": "2025-01-10",
+    }
+    # First ingestion
+    res1 = client.post(f"/api/v1/stocks/{stock_id}/prices/ingest-historical", json=payload)
+    assert res1.status_code == 200
+    first_inserted = res1.json()["records_inserted"]
+    assert first_inserted > 0
+
+    # Second ingestion (same date range) - should update, not insert duplicates
+    res2 = client.post(f"/api/v1/stocks/{stock_id}/prices/ingest-historical", json=payload)
+    assert res2.status_code == 200
+    assert res2.json()["records_inserted"] == 0
+    assert res2.json()["records_updated"] == first_inserted
+
+    # Verify no duplicates
+    history_res = client.get(f"/api/v1/stocks/{stock_id}/prices?start_date=2025-01-01&end_date=2025-01-10")
+    assert history_res.status_code == 200
+    assert len(history_res.json()) == first_inserted
+
+
+def test_ingest_historical_prices_invalid_date_range(client: TestClient):
+    """Test 18: Historical ingestion rejects invalid date range."""
+    stock_id = create_test_stock(client, "BADDATES")
+
+    payload = {
+        "start_date": "2025-01-10",
+        "end_date": "2025-01-01",  # end before start
+    }
+    response = client.post(f"/api/v1/stocks/{stock_id}/prices/ingest-historical", json=payload)
+    assert response.status_code == 422
+    data = response.json()
+    assert data["success"] is False
+    assert data["error"]["code"] == "VALIDATION_ERROR"
+
+
+def test_ingest_historical_prices_not_found(client: TestClient):
+    """Test 19: Historical ingestion returns 404 for non-existent stock."""
+    payload = {
+        "start_date": "2025-01-01",
+        "end_date": "2025-01-10",
+    }
+    response = client.post("/api/v1/stocks/999999/prices/ingest-historical", json=payload)
+    assert response.status_code == 404
+    data = response.json()
+    assert data["success"] is False
+    assert data["error"]["code"] == "STOCK_NOT_FOUND"
+
+
+def test_ingest_current_price_not_found(client: TestClient):
+    """Test 20: Current price ingestion returns 404 for non-existent stock."""
+    response = client.post("/api/v1/stocks/999999/prices/ingest")
+    assert response.status_code == 404
+    data = response.json()
+    assert data["success"] is False
+    assert data["error"]["code"] == "STOCK_NOT_FOUND"

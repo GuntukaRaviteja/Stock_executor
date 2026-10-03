@@ -12,8 +12,13 @@ class Stock(Base):
     symbol: Mapped[str] = mapped_column(String(20), unique=True, nullable=False, index=True)
     company_name: Mapped[str] = mapped_column(String(255), nullable=False)
     exchange: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    market: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    provider_symbol: Mapped[Optional[str]] = mapped_column(String(50), nullable=True, index=True)
     created_at: Mapped[Optional[datetime]] = mapped_column(
         DateTime, server_default=func.now(), nullable=True
+    )
+    updated_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime, onupdate=func.now(), nullable=True
     )
 
     # Relationships
@@ -35,6 +40,12 @@ class Stock(Base):
         uselist=False,
         cascade="all, delete-orphan",
     )
+    backtests: Mapped[List["Backtest"]] = relationship(
+        "Backtest",
+        back_populates="stock",
+        cascade="all, delete-orphan",
+        order_by="desc(Backtest.created_at)",
+    )
 
     def __repr__(self) -> str:
-        return f"<Stock(id={self.id}, symbol='{self.symbol}', company_name='{self.company_name}')>"
+        return f"<Stock(id={self.id}, symbol='{self.symbol}', company_name='{self.company_name}', exchange='{self.exchange}', market='{self.market}', provider_symbol='{self.provider_symbol}')>"

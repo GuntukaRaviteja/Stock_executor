@@ -4,6 +4,15 @@ from app.models.price import StockPrice
 from app.models.event import StockEvent
 from app.models.company import Company
 from app.models.raw_ai_data import RawAIData
+from app.models.backtest import Backtest, BacktestTrade, BacktestEquityPoint
+from app.models.portfolio import (
+    Portfolio,
+    PortfolioOrder,
+    PortfolioPosition,
+    PortfolioSnapshot,
+    PortfolioTrade,
+    PortfolioTransaction,
+)
 
 __all__ = [
     "Base",
@@ -12,4 +21,13 @@ __all__ = [
     "StockEvent",
     "Company",
     "RawAIData",
+    "Backtest",
+    "BacktestTrade",
+    "BacktestEquityPoint",
+    "Portfolio",
+    "PortfolioPosition",
+    "PortfolioOrder",
+    "PortfolioTrade",
+    "PortfolioSnapshot",
+    "PortfolioTransaction",
 ]
