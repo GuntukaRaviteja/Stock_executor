@@ -13,6 +13,7 @@ from app.models.portfolio import (
     PortfolioTrade,
     PortfolioTransaction,
 )
+from app.models.execution import PortfolioExecution, PortfolioExecutionEvent
 
 __all__ = [
     "Base",
@@ -30,4 +31,6 @@ __all__ = [
     "PortfolioTrade",
     "PortfolioSnapshot",
     "PortfolioTransaction",
+    "PortfolioExecution",
+    "PortfolioExecutionEvent",
 ]

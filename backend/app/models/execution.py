@@ -27,7 +27,7 @@ transaction. Every monetary column is ``Numeric``, exactly as in ``app.models.po
 
 from datetime import datetime
 from decimal import Decimal
-from typing import List, Optional
+from typing import Optional
 
 from sqlalchemy import (
     BigInteger,
@@ -174,4 +174,4 @@ class PortfolioExecutionEvent(Base):
         )
 
 
-__all__ = ["PortfolioExecution", "PortfolioExecutionEvent", "List"]
+__all__ = ["PortfolioExecution", "PortfolioExecutionEvent"]

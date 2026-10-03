@@ -283,6 +283,14 @@ class PortfolioOrder(Base):
     trade: Mapped[Optional["PortfolioTrade"]] = relationship(
         "PortfolioTrade", back_populates="order", uselist=False
     )
+    #: Phase 16: the individual fills this order produced. Empty for a Phase 9 order, which
+    #: records its single fill as a ``PortfolioTrade`` instead.
+    executions: Mapped[list] = relationship(
+        "PortfolioExecution",
+        back_populates="order",
+        cascade="all, delete-orphan",
+        order_by="PortfolioExecution.id",
+    )
 
     __table_args__ = (
         Index("ix_portfolio_order_history", "portfolio_id", "created_at", "id"),

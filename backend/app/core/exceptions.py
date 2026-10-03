@@ -521,3 +521,180 @@ class RiskAdjustmentError(AppException):
             status_code=409,
             details=details,
         )
+
+
+# --- Phase 16: execution lifecycle ---
+
+
+class ExecutionPlanError(AppValidationError):
+    """Raised when a target portfolio cannot be turned into an order plan.
+
+    A target that names no size at all, states a negative quantity, or lists one stock twice is
+    a contradiction rather than a trade. It is refused because a plan built from it would either
+    sell a holding by accident or trade something the caller did not ask for.
+    """
+
+    def __init__(self, message: str, details: Optional[Any] = None):
+        super().__init__(message, details=details)
+
+
+class OrderPlanRejectedError(AppException):
+    """Raised when a plan passes structural validation but is not executable.
+
+    Carries every finding, not just the first: a plan short of cash *and* over its position cap
+    should say so in one response, and reporting one problem per round trip would let a caller
+    fix them one at a time. ``409`` — the request was well formed, but it conflicts with the
+    portfolio's stored state.
+    """
+
+    def __init__(self, portfolio_id: Any, plan_id: Any, findings: Any, details: Optional[Any] = None):
+        codes = [finding.code for finding in findings]
+        message = (
+            f"Order plan {plan_id} for portfolio {portfolio_id} was refused: "
+            f"{', '.join(codes)}."
+            if codes
+            else f"Order plan {plan_id} for portfolio {portfolio_id} was refused."
+        )
+        super().__init__(
+            code="ORDER_PLAN_REJECTED",
+            message=message,
+            status_code=409,
+            details={"portfolio_id": portfolio_id, "plan_id": plan_id, "codes": codes, **(details or {})},
+        )
+
+
+class ExecutionRiskRejectedError(AppException):
+    """Raised when the pre-trade risk gate refuses a plan.
+
+    The refusal names the limits that fired, carried straight from the existing risk engine, so
+    the caller sees which configured rule said no rather than a generic "risk error". No order was
+    submitted and nothing was changed.
+    """
+
+    def __init__(self, portfolio_id: Any, plan_id: Any, findings: Any):
+        codes = [finding.code for finding in findings]
+        super().__init__(
+            code="RISK_REJECTED",
+            message=(
+                f"Pre-trade risk refused order plan {plan_id} for portfolio {portfolio_id}: "
+                f"{', '.join(codes)}. Nothing was submitted."
+            ),
+            status_code=409,
+            details={
+                "portfolio_id": portfolio_id,
+                "plan_id": plan_id,
+                "codes": codes,
+                "findings": [
+                    {"code": f.code, "message": f.message, "stock_id": f.stock_id}
+                    for f in findings
+                ],
+            },
+        )
+
+
+class InvalidOrderStateTransitionError(AppException):
+    """Raised when an order is asked to change state it cannot change to.
+
+    An order that has filled cannot be submitted again, and one that is already working cannot be
+    re-sent as though it had never left. The transition is refused rather than applied, because
+    applying it would let a settled order move and book the same trade twice.
+    """
+
+    def __init__(self, order_id: Any, current: Any, requested: Any, allowed: Any = ()):
+        super().__init__(
+            code="INVALID_STATE_TRANSITION",
+            message=(
+                f"Order {order_id} cannot move from {current} to {requested}. "
+                + (
+                    f"Legal next states: {', '.join(sorted(allowed))}."
+                    if allowed
+                    else f"{current} is a terminal state."
+                )
+            ),
+            status_code=409,
+            details={
+                "order_id": order_id,
+                "current_status": str(current),
+                "requested_status": str(requested),
+                "allowed": sorted(str(state) for state in allowed),
+            },
+        )
+
+
+class OrderExecutionFailedError(AppException):
+    """Raised when an execution could not be completed and the failure is recorded.
+
+    The order and the audit events survive the failure — that is why this is a reported error
+    rather than a silent one. The portfolio is left in whatever state its committed fills
+    produced, which is why the reconciliation result travels with the error.
+    """
+
+    def __init__(self, message: str, details: Optional[Any] = None):
+        super().__init__(
+            code="EXECUTION_FAILED", message=message, status_code=500, details=details
+        )
+
+
+class ExecutionNotSupportedError(AppValidationError):
+    """Raised for an order type or side this engine will not simulate.
+
+    A LIMIT order with no limit price, or an unknown order type, is refused rather than quietly
+    submitted as something else: converting a limit order into a market order fills it at a price
+    nothing asked for, which is the one outcome that would make the result look right while
+    describing a different trade.
+    """
+
+    def __init__(self, message: str, details: Optional[Any] = None):
+        super().__init__(message, details=details)
+
+
+class StalePortfolioError(AppException):
+    """Raised when a target was built from state that has since moved on.
+
+    A plan priced against old marks carries the wrong reference prices, so executing it can spend
+    cash the account no longer has and breach a limit it would have passed at current marks. It is
+    refused and must be rebuilt rather than executed at a stale price.
+    """
+
+    def __init__(self, portfolio_id: Any, plan_id: Any, age_seconds: Any, max_age_seconds: Any):
+        super().__init__(
+            code="STALE_PORTFOLIO",
+            message=(
+                f"Order plan {plan_id} for portfolio {portfolio_id} is {age_seconds}s old, "
+                f"beyond the {max_age_seconds}s staleness limit. Rebuild the plan from current "
+                "marks."
+            ),
+            status_code=409,
+            details={
+                "portfolio_id": portfolio_id,
+                "plan_id": plan_id,
+                "age_seconds": str(age_seconds),
+                "max_age_seconds": str(max_age_seconds),
+            },
+        )
+
+
+class ReconciliationMismatchError(AppException):
+    """Raised when a reconciliation finds books that do not agree.
+
+    Reported and never repaired. ``409`` because the request succeeded and the answer is "the
+    portfolio does not reconcile" — not that the caller asked for something invalid.
+    """
+
+    def __init__(self, portfolio_id: Any, discrepancies: Any):
+        super().__init__(
+            code="RECONCILIATION_MISMATCH",
+            message=(
+                f"Portfolio {portfolio_id} does not reconcile: {len(discrepancies)} "
+                f"discrepancy/ies found. Nothing was changed."
+            ),
+            status_code=409,
+            details={
+                "portfolio_id": portfolio_id,
+                "codes": [d.code for d in discrepancies],
+                "discrepancies": [
+                    {"code": d.code, "message": d.message, "stock_id": d.stock_id}
+                    for d in discrepancies
+                ],
+            },
+        )

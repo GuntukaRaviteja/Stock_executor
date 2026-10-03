@@ -14,6 +14,12 @@ from app.repositories.portfolio_transaction_repository import (
     PortfolioTransactionRepository,
     portfolio_transaction_repository,
 )
+from app.repositories.execution_repository import (
+    ExecutionEventRepository,
+    ExecutionRepository,
+    execution_event_repository,
+    execution_repository,
+)
 
 __all__ = [
     "StockRepository",
@@ -36,4 +42,8 @@ __all__ = [
     "portfolio_snapshot_repository",
     "PortfolioTransactionRepository",
     "portfolio_transaction_repository",
+    "ExecutionRepository",
+    "execution_repository",
+    "ExecutionEventRepository",
+    "execution_event_repository",
 ]
